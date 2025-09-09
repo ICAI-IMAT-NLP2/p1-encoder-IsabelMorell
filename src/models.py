@@ -25,9 +25,9 @@ class AttentionHead(nn.Module):
     def __init__(self, d_model: int, d_k: int, d_q: int, d_v: int):
         super(AttentionHead, self).__init__()
 
-        self.wq = None
-        self.wk = None
-        self.wv = None
+        self.wq = nn.Linear(d_model, d_q)
+        self.wk = nn.Linear(d_model, d_k)
+        self.wv = nn.Linear(d_model, d_v)
 
     def scaled_dot_product_attention(self, q, k, v):
         """Calculate the attention weights.
@@ -43,18 +43,18 @@ class AttentionHead(nn.Module):
         """
 
         # The dimension of the key tensor, used to scale the scores.
-        dim_k = None
+        dim_k = k.shape[-1]
 
         # Calculate the dot product between query and the transpose of key.
         # The result is then scaled by the square root of dim_k.
-        scores = None
+        scores = torch.matmul(q, k.transpose(1, 2)) / torch.sqrt(torch.tensor(dim_k))
 
         # Apply the softmax function to obtain the attention weights.
-        weights = None
+        weights = torch.softmax(scores, -1)
 
         # Compute the output by performing a weighted sum of the value tensor
         # using the attention weights.
-        output = None
+        output = weights @ v
 
         return output, weights
 
@@ -68,11 +68,11 @@ class AttentionHead(nn.Module):
             Tensor: Output tensor of shape (batch_size, seq_len, d_v).
         """
         # Obtain the corresponding query, key, and value vectors of the input tensor.
-        q = None
-        k = None
-        v = None
+        q = self.wq(x)
+        k = self.wk(x)
+        v = self.wv(x)
 
-        output, _ = None
+        output, _ = self.scaled_dot_product_attention(q, k, v)
 
         return output
 
@@ -93,8 +93,10 @@ class MultiHeadAttention(nn.Module):
 
     def __init__(self, d_model: int, num_attention_heads: int):
         super(MultiHeadAttention, self).__init__()
-        self.heads = None
-        self.output_linear = None
+        
+        dim = d_model // num_attention_heads
+        self.heads = nn.ModuleList([AttentionHead(d_model, d_k=dim, d_q=dim, d_v=dim) for i in range(num_attention_heads)])
+        self.output_linear = nn.Linear(dim*num_attention_heads, d_model)  # d_model = dim*num_attention_heads
 
     def forward(self, hidden_state):
         """Forward pass for the multi-head attention layer.
@@ -105,7 +107,14 @@ class MultiHeadAttention(nn.Module):
         Returns:
             Tensor: Output tensor of shape (batch_size, seq_len, d_model).
         """
-        x = None
+        d_model = hidden_state.shape[-1]
+        num_attention_heads = len(self.heads)
+        if d_model % num_attention_heads != 0:
+            raise RuntimeError("d_model not divisible by heads")
+        
+        attention_outputs = [head(hidden_state) for head in self.heads]
+        concatenated_outputs = torch.concat(attention_outputs, dim=-1)
+        x = self.output_linear(concatenated_outputs)
         return x
     
 class FeedForward(nn.Module):
